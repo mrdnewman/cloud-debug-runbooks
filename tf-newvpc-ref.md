@@ -1,4 +1,3 @@
-
 provider "aws" {
   region = var.region
 }
@@ -81,12 +80,12 @@ resource "aws_subnet" "public" {
   }
 }
 
+
 resource "aws_route_table" "public_rt" {
 
   vpc_id = aws_vpc.main.id
 
   route {
-
     cidr_block = "0.0.0.0/0"
 
     gateway_id = aws_internet_gateway.igw.id
@@ -118,9 +117,7 @@ resource "aws_security_group" "web_sg" {
     to_port   = 80
     protocol  = "tcp"
 
-    cidr_blocks = [
-      "0.0.0.0/0"
-    ]
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   ingress {
@@ -129,9 +126,7 @@ resource "aws_security_group" "web_sg" {
     to_port   = 22
     protocol  = "tcp"
 
-    cidr_blocks = [
-      "0.0.0.0/0"
-    ]
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
@@ -140,9 +135,7 @@ resource "aws_security_group" "web_sg" {
     to_port   = 0
     protocol  = "-1"
 
-    cidr_blocks = [
-      "0.0.0.0/0"
-    ]
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
@@ -166,12 +159,10 @@ resource "aws_instance" "web" {
 }
 
 output "vpc_id" {
-
   value = aws_vpc.main.id
 }
 
 output "instance_ids" {
-
   value = [
     for i in aws_instance.web :
     i.id
@@ -179,12 +170,13 @@ output "instance_ids" {
 }
 
 output "instance_public_ips" {
-
   value = [
     for i in aws_instance.web :
     i.public_ip
   ]
 }
+
+
 
 # Full Import Workflow
 
