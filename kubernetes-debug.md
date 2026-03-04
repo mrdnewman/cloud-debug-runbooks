@@ -2,19 +2,40 @@
 # KUBERNETES INCIDENT DEBUG RUNBOOK
 # ==========================================
 
+# Core flow
+# Node → Pod → Container → App → Resources → Service
+
+
 # -------------------------------------------------
-# 1. See what is failing
+# 1. Identify failing workload
 # -------------------------------------------------
 
-kubectl get pods -A
+kubectl get pods -A -o wide
+
+# locate failing pod
+# copy POD_NAME and NAMESPACE
+
 
 
 # =================================================
 # STATUS = Running
 # =================================================
 
-# cluster / pod healthy
-# nothing to fix
+# pod healthy
+# if app still failing → check service / ingress
+
+kubectl get svc -n NAMESPACE
+kubectl get endpoints SERVICE_NAME -n NAMESPACE
+
+# if endpoints empty → label mismatch
+
+kubectl get pods --show-labels -n NAMESPACE
+kubectl describe svc SERVICE_NAME -n NAMESPACE
+
+# FIX
+kubectl edit svc SERVICE_NAME -n NAMESPACE
+# or
+kubectl edit deployment DEPLOYMENT_NAME -n NAMESPACE
 
 
 
@@ -24,21 +45,58 @@ kubectl get pods -A
 
 # container repeatedly crashing
 
-# inspect pod
 kubectl describe pod POD_NAME -n NAMESPACE
 
-# check logs
 kubectl logs POD_NAME -n NAMESPACE
-
-# if container restarted
 kubectl logs POD_NAME -n NAMESPACE --previous
 
-# fix usually requires:
-# bad config
-# missing env variable
-# application error
 
-# restart deployment after fix
+# ---- If logs show missing environment variable ----
+
+kubectl edit deployment DEPLOYMENT_NAME -n NAMESPACE
+
+# add env variable
+
+# env:
+# - name: VARIABLE_NAME
+#   value: VALUE
+
+kubectl rollout restart deployment DEPLOYMENT_NAME -n NAMESPACE
+
+
+
+# ---- If logs show missing configmap ----
+
+kubectl get configmap -n NAMESPACE
+
+kubectl describe configmap CONFIGMAP_NAME -n NAMESPACE
+
+kubectl edit configmap CONFIGMAP_NAME -n NAMESPACE
+
+kubectl rollout restart deployment DEPLOYMENT_NAME -n NAMESPACE
+
+
+
+# ---- If logs show missing secret ----
+
+kubectl get secrets -n NAMESPACE
+
+kubectl describe secret SECRET_NAME -n NAMESPACE
+
+kubectl create secret generic SECRET_NAME \
+--from-literal=KEY=VALUE \
+-n NAMESPACE
+
+kubectl rollout restart deployment DEPLOYMENT_NAME -n NAMESPACE
+
+
+
+# ---- If container command / startup wrong ----
+
+kubectl get pod POD_NAME -n NAMESPACE -o yaml | grep command -A5
+
+kubectl edit deployment DEPLOYMENT_NAME -n NAMESPACE
+
 kubectl rollout restart deployment DEPLOYMENT_NAME -n NAMESPACE
 
 
@@ -47,24 +105,22 @@ kubectl rollout restart deployment DEPLOYMENT_NAME -n NAMESPACE
 # STATUS = ImagePullBackOff / ErrImagePull
 # =================================================
 
-# image cannot be pulled
-
-# inspect error
 kubectl describe pod POD_NAME -n NAMESPACE
 
-# check image being used
 kubectl get pod POD_NAME -n NAMESPACE -o jsonpath='{.spec.containers[*].image}'; echo
 
-# FIX OPTION 1: wrong image tag
+
+# ---- Fix incorrect image tag ----
+
 kubectl set image deployment/DEPLOYMENT_NAME \
 CONTAINER_NAME=IMAGE:TAG \
 -n NAMESPACE
 
-# restart rollout
 kubectl rollout restart deployment DEPLOYMENT_NAME -n NAMESPACE
 
 
-# FIX OPTION 2: private registry authentication issue
+
+# ---- Fix private registry authentication ----
 
 kubectl get secrets -n NAMESPACE
 
@@ -91,17 +147,25 @@ kubectl rollout restart deployment DEPLOYMENT_NAME -n NAMESPACE
 
 # container exceeded memory limit
 
-# confirm OOM kill
 kubectl describe pod POD_NAME -n NAMESPACE | grep -i oom
 
-# check resource limits
 kubectl get pod POD_NAME -n NAMESPACE -o yaml | grep -A5 resources
 
-# FIX: increase memory limit
+
+# resources structure
+
+# resources:
+#   requests:
+#     memory: 256Mi
+#   limits:
+#     memory: 512Mi
+
+
+# FIX increase memory
 
 kubectl edit deployment DEPLOYMENT_NAME -n NAMESPACE
 
-# change section to something larger
+# change example
 
 # resources:
 #   requests:
@@ -109,7 +173,6 @@ kubectl edit deployment DEPLOYMENT_NAME -n NAMESPACE
 #   limits:
 #     memory: 1Gi
 
-# restart deployment
 
 kubectl rollout restart deployment DEPLOYMENT_NAME -n NAMESPACE
 
@@ -125,12 +188,14 @@ kubectl rollout status deployment DEPLOYMENT_NAME -n NAMESPACE
 
 kubectl describe pod POD_NAME -n NAMESPACE
 
-# look for:
+# look for
 # Insufficient cpu
 # Insufficient memory
-# node selector issues
+# node selector mismatch
 
-# check node resources
+
+# inspect cluster capacity
+
 kubectl get nodes
 kubectl describe node NODE_NAME
 
@@ -138,11 +203,11 @@ kubectl top nodes
 kubectl top pods -A
 
 
-# FIX OPTION 1: reduce resource requests
+# ---- Fix resource requests ----
 
 kubectl edit deployment DEPLOYMENT_NAME -n NAMESPACE
 
-# lower requests:
+# reduce requests example
 
 # resources:
 #   requests:
@@ -150,28 +215,16 @@ kubectl edit deployment DEPLOYMENT_NAME -n NAMESPACE
 #     memory: 256Mi
 
 
-# FIX OPTION 2: add cluster capacity
-# (environment dependent)
-
-# restart deployment after change
-
 kubectl rollout restart deployment DEPLOYMENT_NAME -n NAMESPACE
 
 
 
 # =================================================
-# STATUS = Running but service unreachable
+# FINAL VERIFICATION
 # =================================================
 
-kubectl get svc -n NAMESPACE
+kubectl get pods -n NAMESPACE -o wide
+
+kubectl rollout status deployment DEPLOYMENT_NAME -n NAMESPACE
+
 kubectl get endpoints SERVICE_NAME -n NAMESPACE
-
-# if endpoints empty → selector mismatch
-
-kubectl get pods --show-labels -n NAMESPACE
-kubectl describe svc SERVICE_NAME -n NAMESPACE
-
-# fix selector or labels
-
-kubectl edit svc SERVICE_NAME -n NAMESPACE
-kubectl edit deployment DEPLOYMENT_NAME -n NAMESPACE
