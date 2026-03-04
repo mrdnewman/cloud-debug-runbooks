@@ -1,96 +1,176 @@
+# ==========================================
 # ALB → EC2 DEBUG RUNBOOK
+# ==========================================
 
-Flow:
+FLOW
 Client → ALB → Target Group → EC2 → Service → Endpoint
 
 
-# 1. Is ALB responding?
+# -------------------------------------------------
+# 1. Get ALB DNS
+# -------------------------------------------------
+
+aws elbv2 describe-load-balancers \
+--query 'LoadBalancers[*].{Name:LoadBalancerName,DNS:DNSName,ARN:LoadBalancerArn}' \
+--output table
+
+# copy ALB_DNS
+
+
+# -------------------------------------------------
+# 2. Test ALB
+# -------------------------------------------------
+
 curl -v http://ALB_DNS
 
-# IF 200 OK
-# → system working
-
-# IF 502 / 503 / 504
-# → backend issue → check target health
+# IF 200 → system OK
+# IF 502 / 503 / 504 → backend problem
 
 
-# 2. Check target health
-aws elbv2 describe-target-health --target-group-arn TARGET_GROUP_ARN
+# -------------------------------------------------
+# 3. Get Target Group ARN
+# -------------------------------------------------
 
-# IF unhealthy
-# → ALB cannot reach instance properly
-# → check service / port / health endpoint
-
-# IF healthy
-# → ALB can reach instance
-# → application behavior or logs issue
+aws elbv2 describe-target-groups \
+--query 'TargetGroups[*].{Name:TargetGroupName,ARN:TargetGroupArn}' \
+--output table
 
 
-# 3. Get instance IP
-aws ec2 describe-instances --instance-ids INSTANCE_ID \
+# -------------------------------------------------
+# 4. Check Target Health
+# -------------------------------------------------
+
+aws elbv2 describe-target-health \
+--target-group-arn TARGET_GROUP_ARN \
+--query 'TargetHealthDescriptions[*].{Instance:Target.Id,State:TargetHealth.State}' \
+--output table
+
+# copy INSTANCE_ID
+
+
+# -------------------------------------------------
+# 5. Get Instance Private IP
+# -------------------------------------------------
+
+aws ec2 describe-instances \
+--instance-ids INSTANCE_ID \
 --query 'Reservations[*].Instances[*].PrivateIpAddress' \
 --output text
 
 
-# 4. SSH into instance
+# -------------------------------------------------
+# 6. SSH into instance
+# -------------------------------------------------
+
 ssh ubuntu@PRIVATE_IP
-# or
 ssh ec2-user@PRIVATE_IP
 
 
-# 5. Is service running?
+# -------------------------------------------------
+# 7. Check service
+# -------------------------------------------------
+
 systemctl status nginx
+systemctl status httpd
 systemctl status app
 
-# IF inactive / failed
+# IF stopped
 sudo systemctl restart nginx
-sudo systemctl restart app
+sudo systemctl restart httpd
 
 
-# 6. Is application listening on a port?
-ss -tulnp
+# -------------------------------------------------
+# 8. Check open ports
+# -------------------------------------------------
 
-# LOOK FOR
-# 0.0.0.0:80
-# 0.0.0.0:8080
+ss -tulnp | grep LISTEN
 
-# Example expected output
-# LISTEN 0 128 0.0.0.0:80 users:(("nginx",pid=1234))
-
-
-# IF no listening port
-# → application not running → check logs
+# look for
+# :80
+# :8080
 
 
-# 7. Does endpoint respond locally?
+# -------------------------------------------------
+# 9. CURL TESTS (endpoint checks)
+# -------------------------------------------------
+
 curl localhost
 curl localhost:80
 curl localhost:8080
+curl localhost/
 curl localhost/health
+curl -I localhost
 
-# IF none respond
-# → app not serving traffic
-# → check logs or restart service
+# RESULTS
+
+# if NONE work
+# → service down / wrong port / crash
+
+# if port works but /health fails
+# → health check mismatch
 
 
-# 8. Check logs
+# -------------------------------------------------
+# 10. Fix Health Check Path
+# -------------------------------------------------
+
+# check current path
+
+aws elbv2 describe-target-groups \
+--target-group-arns TARGET_GROUP_ARN \
+--query 'TargetGroups[*].HealthCheckPath'
+
+
+# modify health check path
+
+aws elbv2 modify-target-group \
+--target-group-arn TARGET_GROUP_ARN \
+--health-check-path /
+
+
+# or change to /health depending on app
+
+
+# -------------------------------------------------
+# 11. If LOCAL works but ALB fails
+# -------------------------------------------------
+
+# check target group port
+
+aws elbv2 describe-target-groups \
+--target-group-arns TARGET_GROUP_ARN \
+--query 'TargetGroups[*].Port'
+
+
+# if port mismatch
+# update target group port
+
+
+# -------------------------------------------------
+# 12. Security Group Fix
+# -------------------------------------------------
+
+# get instance SG
+
+aws ec2 describe-instances \
+--instance-ids INSTANCE_ID \
+--query 'Reservations[*].Instances[*].SecurityGroups[*].GroupId'
+
+
+# allow ALB SG to reach instance port
+
+aws ec2 authorize-security-group-ingress \
+--group-id INSTANCE_SG \
+--protocol tcp \
+--port 80 \
+--source-group ALB_SG
+
+
+# -------------------------------------------------
+# 13. Logs
+# -------------------------------------------------
+
 journalctl -u nginx -n 50
-journalctl -u app -n 50
+journalctl -xe
+
 tail -f /var/log/nginx/error.log
-
-
-# 9. Health check validation
-curl localhost/health
-
-# IF /health fails but / works
-# → ALB health check path mismatch
-# → update health check path
-
-
-# 10. If local curl works but ALB fails
-# → network / config issue
-
-# Check security group
-aws ec2 describe-security-groups --group-ids SG_ID
-
-# Ensure ALB SG can access port 80 / 8080
